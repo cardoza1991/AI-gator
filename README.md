@@ -1,2 +1,2 @@
 # AI-gator
-Collab for 
+Collab for AI R&D
