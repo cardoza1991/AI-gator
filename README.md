@@ -1,2 +1,3 @@
 # AI-gator
-Collab for 
+Collab for PrivateGPT projects
+
