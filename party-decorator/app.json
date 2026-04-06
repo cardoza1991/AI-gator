@@ -1,0 +1,43 @@
+{
+  "expo": {
+    "name": "D•CORE Party Designer",
+    "slug": "party-decorator",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#7C3AED"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.dcore.partydesigner",
+      "infoPlist": {
+        "NSPhotoLibraryUsageDescription": "We need access to your photos to upload your venue space.",
+        "NSCameraUsageDescription": "We need camera access to capture your venue space.",
+        "NSPhotoLibraryAddUsageDescription": "We save your party designs to your photo library."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#7C3AED"
+      },
+      "package": "com.dcore.partydesigner",
+      "permissions": [
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE",
+        "CAMERA"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-image-picker",
+      "expo-media-library"
+    ]
+  }
+}
