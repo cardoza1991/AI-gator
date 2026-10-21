@@ -17,6 +17,8 @@ from scipy import ndimage
 from scipy.spatial import cKDTree
 from skimage import measure
 
+from flatbase import drop_strays, load_points, unit_scale
+
 
 def load(path):
     m = trimesh.load(path, force="mesh")
@@ -79,9 +81,39 @@ def surface_points(mesh, voxel):
     return mesh.sample(int(mesh.area / (voxel * voxel) * 4) + 1000)
 
 
+def make_watertight(m):
+    """Fix the rare marching-cubes pinch (edge shared by 4 faces): cut it out, keep the
+    main body, patch the tiny hole."""
+    m.merge_vertices()
+    if m.is_watertight:
+        return m
+    u, inv, cnt = np.unique(m.edges_sorted, axis=0, return_inverse=True, return_counts=True)
+    bad_v = np.unique(u[cnt != 2])
+    m.update_faces(~np.isin(m.faces, bad_v).any(1))
+    m.remove_unreferenced_vertices()
+    parts = m.split(only_watertight=False)
+    m = max(parts, key=lambda p: len(p.faces))
+    # cap each small hole with a fan from its centre
+    u, cnt = np.unique(m.edges_sorted, axis=0, return_counts=True)
+    open_e = u[cnt == 1]
+    if len(open_e):
+        import networkx as nx
+
+        verts = [m.vertices]
+        faces = [m.faces]
+        nv = len(m.vertices)
+        for loop in nx.cycle_basis(nx.Graph(open_e.tolist())):
+            verts.append(m.vertices[loop].mean(0)[None])
+            faces.append(np.array([[loop[i], loop[(i + 1) % len(loop)], nv] for i in range(len(loop))]))
+            nv += 1
+        m = trimesh.Trimesh(np.vstack(verts), np.vstack(faces))
+    m.fix_normals()
+    return m
+
+
 def voxel_shell(clouds, voxel, smooth, close, offset=0.0):
     """Rasterize surface points, close gaps, fill inside, blur, re-surface. Always watertight."""
-    pad = (close + 4 * smooth + 3) * voxel + offset
+    pad = (2 * close + 4 * smooth + 6) * voxel + offset
     lo = np.min([c.min(0) for c in clouds], 0) - pad
     hi = np.max([c.max(0) for c in clouds], 0) + pad
     shape = np.ceil((hi - lo) / voxel).astype(int) + 1
@@ -93,13 +125,28 @@ def voxel_shell(clouds, voxel, smooth, close, offset=0.0):
         grid[ijk[:, 0], ijk[:, 1], ijk[:, 2]] = True
 
     ball = ndimage.generate_binary_structure(3, 1)
-    # thicken skin so gaps <= 2*close voxels seal, fill inside, shrink back
-    k = close + 1
-    shell = ndimage.binary_dilation(grid, ball, iterations=k)
-    grid = ndimage.binary_fill_holes(shell)
-    if grid.sum() < 1.5 * shell.sum():
-        print("  WARN: shell did not close (hole too big). use --ai or raise --close")
-    grid = ndimage.binary_erosion(grid, ball, iterations=k, border_value=0)
+    surface = grid
+    # thicken skin so gaps <= 2*k voxels seal, fill inside, shrink back.
+    # If the shell still leaks (big scan gaps), seal harder rather than output scrap.
+    for k in (close + 1, 2 * close + 2):
+        shell = ndimage.binary_dilation(surface, ball, iterations=k)
+        grid = ndimage.binary_fill_holes(shell)
+        if grid.sum() > 1.5 * shell.sum():
+            grid = ndimage.binary_erosion(grid, ball, iterations=k, border_value=0)
+            break
+        print(f"  shell leaks at {k * voxel:.1f} mm sealing, trying harder")
+    else:
+        # big gaps (usually side walls): fill each column between top and bottom skin.
+        # Grid z is the part's thinnest direction (see main), so this is top-to-bottom.
+        print("  big gaps: filling between top and bottom surfaces instead")
+        k = close + 1
+        skin = ndimage.binary_dilation(surface, ball, iterations=1)
+        z = np.arange(skin.shape[2])
+        first = np.where(skin.any(2), skin.argmax(2), -1)
+        last = np.where(skin.any(2), skin.shape[2] - 1 - skin[:, :, ::-1].argmax(2), -2)
+        grid = (z >= first[..., None]) & (z <= last[..., None])
+        grid = ndimage.binary_closing(grid, ball, iterations=k)
+        grid = ndimage.binary_erosion(grid, ball, iterations=1, border_value=0)  # undo skin growth
     grid = ndimage.binary_opening(grid, ball, iterations=1)  # kill spikes
     lab, n = ndimage.label(grid)
     if n > 1:  # keep biggest solid
@@ -111,12 +158,12 @@ def voxel_shell(clouds, voxel, smooth, close, offset=0.0):
     v, f, _, _ = measure.marching_cubes(vol, 0.5, spacing=(voxel,) * 3)
     out = trimesh.Trimesh(v + lo, f[:, ::-1])
     out.fix_normals()
-    return out
+    return make_watertight(out)
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("scan", help="raw scan mesh (stl/ply/obj)")
+    ap.add_argument("scan", help="raw scan: mesh (stl/ply/obj) or points (asc/xyz/ply)")
     ap.add_argument("--ai", help="AI mesh made from photos (glb/obj/stl); fills scan holes")
     ap.add_argument("-o", "--out", default="smooth.stl")
     ap.add_argument("--voxel", type=float, default=0.5, help="grid size in scan units (mm). bigger = blobbier, faster")
@@ -124,6 +171,7 @@ def main():
     ap.add_argument("--close", type=int, default=3, help="voxels of gap to seal in scan")
     ap.add_argument("--offset", type=float, default=0.0, help="grow surface outward by this many mm (clearance)")
     ap.add_argument("--faces", type=int, default=200000, help="target face count for slicer")
+    ap.add_argument("--units", choices=["auto", "mm", "in"], default="auto", help="scan units; output is always mm")
     a = ap.parse_args()
     for f in [v for k, v in vars(a).items() if k in ("scan", "ai", "side_a", "side_b", "image") and v]:
         if f.lower().endswith(".wrp"):
@@ -132,17 +180,40 @@ def main():
         if not os.path.isfile(f):
             raise SystemExit(f"file not found: {f}\n  (run from the folder that has it, or give the full path, e.g. C:\\scans\\part.stl)")
 
-    scan = drop_junk(load(a.scan))
-    print(f"scan: {len(scan.faces)} faces, size {scan.extents.round(2)}")
-    meshes = [scan]
+    pts, scan = load_points(a.scan)
+    k = unit_scale(pts, a.units)
+    if scan is not None and len(scan.faces):
+        scan.apply_scale(k)  # no size-based junk filter: real scans are many small passes
+        cloud = drop_strays(surface_points(scan, a.voxel))
+        print(f"scan: mesh, {len(scan.faces):,} faces, size {np.ptp(cloud, 0).round(2)} mm")
+        meshes = [scan]
+        clouds = [cloud]
+    else:
+        pts = drop_strays(pts * k)
+        print(f"scan: points, {len(pts):,}, size {np.ptp(pts, 0).round(2)} mm")
+        meshes = []
+        clouds = [pts]
     if a.ai:
+        if not meshes:
+            raise SystemExit("--ai needs the scan as a mesh (stl/obj/ply with faces)")
         ai = drop_junk(load(a.ai))
-        meshes.append(align_ai_to_scan(ai, scan))
+        clouds.append(surface_points(align_ai_to_scan(ai, scan), a.voxel))
 
-    out = voxel_shell([surface_points(m, a.voxel) for m in meshes], a.voxel, a.smooth, a.close, a.offset)
+    # work in the part's own frame: longest axis x, thinnest axis z
+    allp = np.vstack(clouds)
+    c, vt = pca_frame(allp[:: max(1, len(allp) // 200000)])
+    if np.linalg.det(vt) < 0:
+        vt[2] *= -1
+    clouds = [(p - c) @ vt.T for p in clouds]
+    out = voxel_shell(clouds, a.voxel, a.smooth, a.close, a.offset)
+    out.vertices = out.vertices @ vt + c
     if len(out.faces) > a.faces:
         try:
-            out = out.simplify_quadric_decimation(face_count=a.faces)
+            dec = out.simplify_quadric_decimation(face_count=a.faces)
+            if dec.is_watertight:
+                out = dec
+            else:
+                print("  decimated mesh not watertight, keeping full resolution")
         except Exception as e:  # needs fast-simplification pkg
             print(f"  decimate skipped ({e})")
     print(f"out: {len(out.faces)} faces, size {out.extents.round(2)}, watertight={out.is_watertight}")

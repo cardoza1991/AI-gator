@@ -14,7 +14,11 @@ Install (Python 3.13 works):
 
     py -3.13 -m pip install -r requirements.txt
 
-Export scans from Geomagic Wrap as raw points or mesh, with no cleanup.
+Export scans from Geomagic Wrap as raw points or mesh, with no cleanup
+(File > Save As > .stl or .asc). The tools can't read `.wrp` projects.
+
+Units: output is always mm. If the scan is under 40 units long the tools assume
+it was exported in inches and convert (they say so). Force with `--units mm` / `--units in`.
 Example inputs/outputs for the pliers test are in `examples/pliers/`.
 
 ## smoothprint.py: full 3D scan (+ optional AI mesh) -> smooth solid
@@ -22,9 +26,12 @@ Example inputs/outputs for the pliers test are in `examples/pliers/`.
     python smoothprint.py scan.stl --voxel 0.5 --smooth 1.5 -o print.stl
     python smoothprint.py scan.stl --ai ai.glb --voxel 0.5 --smooth 1.5 -o print.stl
 
-Drops floating junk, optionally aligns an AI mesh made from photos (Hunyuan3D,
+Works on meshes or point clouds. Drops specks floating away from the part
+(scan passes that touch the part are kept, however small), optionally aligns an AI mesh made from photos (Hunyuan3D,
 TRELLIS, Meshy, Tripo) to the scan to fill large holes (scan sets the size),
-then voxelizes, seals gaps, blurs and re-surfaces. Always watertight.
+then voxelizes in the part's own frame, seals gaps, blurs and re-surfaces.
+If side walls have big gaps the shell can't seal, it fills between the top and
+bottom surfaces instead. It stops with a message rather than writing scrap.
 
 - `--voxel` mm per voxel. 0.2-0.4 fine, 1.0 blobby. Smaller = slower.
 - `--smooth` blur in voxels. 0 keeps scratches, 3+ melts edges.

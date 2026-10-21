@@ -6,3 +6,4 @@ fast-simplification
 opencv-python-headless
 shapely
 mapbox-earcut
+networkx

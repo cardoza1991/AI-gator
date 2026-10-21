@@ -33,6 +33,35 @@ def load_points(path, n=2_000_000):
     return np.vstack([pts, g.vertices]), g
 
 
+def unit_scale(pts, units):
+    """Factor to mm. 'auto' assumes inches when the part is under 40 units long."""
+    if units == "mm":
+        return 1.0
+    if units == "in":
+        return 25.4
+    longest = np.ptp(pts, 0).max()
+    if longest < 40:
+        print(f"  part is only {longest:.2f} units long: assuming INCHES, converting to mm (use --units mm to stop this)")
+        return 25.4
+    return 1.0
+
+
+def drop_strays(pts, cell=2.0, keep_frac=0.01):
+    """Remove specks floating away from the part. Pieces touching the part (other scan
+    passes, edge strips) stay, however small; only far-off clusters go."""
+    ijk = np.floor((pts - pts.min(0)) / cell).astype(np.int64)
+    occ = np.zeros(ijk.max(0) + 1, bool)
+    occ[tuple(ijk.T)] = True
+    lab, n = ndimage.label(occ, structure=np.ones((3, 3, 3)))
+    if n <= 1:
+        return pts
+    sizes = np.bincount(lab.ravel())[1:]
+    good = np.flatnonzero(sizes >= keep_frac * sizes.max()) + 1
+    keep = np.isin(lab[tuple(ijk.T)], good)
+    if (~keep).sum():
+        print(f"  dropped {(~keep).sum():,} stray points in {n - len(good)} far-off clusters")
+    return pts[keep]
+
 def fit_plane(pts, tol, iters=400, seed=0):
     """RANSAC plane. Returns (normal, d, inlier mask)."""
     rng = np.random.default_rng(seed)
@@ -79,6 +108,7 @@ def main():
     ap.add_argument("--plate-tol", type=float, default=0.3, help="mm: points this close to the plate count as plate")
     ap.add_argument("--fill", type=float, default=3.0, help="mm: close scan gaps up to about this wide")
     ap.add_argument("--faces", type=int, default=200000, help="target face count for slicer")
+    ap.add_argument("--units", choices=["auto", "mm", "in"], default="auto", help="scan units; output is always mm")
     ap.add_argument("--min-height", type=float, default=0.5, help="mm above plate to count as part")
     a = ap.parse_args()
     for f in [v for k, v in vars(a).items() if k in ("scan", "ai", "side_a", "side_b", "image") and v]:
@@ -89,6 +119,7 @@ def main():
             raise SystemExit(f"file not found: {f}\n  (run from the folder that has it, or give the full path, e.g. C:\\scans\\part.stl)")
 
     pts, _ = load_points(a.scan)
+    pts = drop_strays(pts * unit_scale(pts, a.units))
     print(f"scan: {len(pts):,} points, size {np.ptp(pts, 0).round(1)} mm")
 
     # 1. plate plane: big flat set if the plate was scanned, else the part's lowest points
@@ -151,7 +182,11 @@ def main():
     m.fix_normals()
     if len(m.faces) > a.faces:
         try:
-            m = m.simplify_quadric_decimation(face_count=a.faces)
+            dec = m.simplify_quadric_decimation(face_count=a.faces)
+            if dec.is_watertight:
+                m = dec
+            else:
+                print("  decimated mesh not watertight, keeping full resolution")
         except Exception as e:  # needs fast-simplification
             print(f"  decimate skipped ({e})")
     print(f"part: {np.ptp(m.vertices, 0).round(2)} mm, {len(m.faces):,} faces, watertight={m.is_watertight}")

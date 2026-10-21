@@ -16,7 +16,7 @@ import numpy as np
 import trimesh
 from scipy.spatial import cKDTree
 
-from flatbase import fit_plane, load_points, to_plane_frame
+from flatbase import drop_strays, fit_plane, load_points, to_plane_frame, unit_scale
 from smoothprint import voxel_shell
 
 
@@ -108,6 +108,7 @@ def main():
     ap.add_argument("--plate-tol", type=float, default=0.3)
     ap.add_argument("--min-height", type=float, default=0.3, help="mm above plate that counts as part")
     ap.add_argument("--faces", type=int, default=200000)
+    ap.add_argument("--units", choices=["auto", "mm", "in"], default="auto", help="scan units; output is always mm")
     a = ap.parse_args()
     for f in [v for k, v in vars(a).items() if k in ("scan", "ai", "side_a", "side_b", "image") and v]:
         if f.lower().endswith(".wrp"):
@@ -119,6 +120,7 @@ def main():
     sides = []
     for name in (a.side_a, a.side_b):
         pts, _ = load_points(name)
+        pts = drop_strays(pts * unit_scale(pts, a.units))
         p, plate = strip_plate(pts, a.plate_tol, a.min_height)
         print(f"{name}: {len(pts):,} pts -> {len(p):,} on part, height {np.ptp(p[:, 2]):.2f} mm")
         sides.append(p)
@@ -128,7 +130,11 @@ def main():
     out = voxel_shell([A, B], a.voxel, a.smooth, a.close, a.offset)
     if len(out.faces) > a.faces:
         try:
-            out = out.simplify_quadric_decimation(face_count=a.faces)
+            dec = out.simplify_quadric_decimation(face_count=a.faces)
+            if dec.is_watertight:
+                out = dec
+            else:
+                print("  decimated mesh not watertight, keeping full resolution")
         except Exception as e:
             print(f"  decimate skipped ({e})")
     print(f"part: {out.extents.round(2)} mm, {len(out.faces):,} faces, watertight={out.is_watertight}")
