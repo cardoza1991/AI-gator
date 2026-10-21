@@ -126,6 +126,9 @@ def main():
     ap.add_argument("--faces", type=int, default=200000, help="target face count for slicer")
     a = ap.parse_args()
     for f in [v for k, v in vars(a).items() if k in ("scan", "ai", "side_a", "side_b", "image") and v]:
+        if f.lower().endswith(".wrp"):
+            raise SystemExit(f"{f} is a Geomagic Wrap project, which can't be read outside Wrap.\n"
+                             "  In Wrap: select the scans, File > Save As > .stl (mesh) or .asc (points), then use that file.")
         if not os.path.isfile(f):
             raise SystemExit(f"file not found: {f}\n  (run from the folder that has it, or give the full path, e.g. C:\\scans\\part.stl)")
 
