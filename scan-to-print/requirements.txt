@@ -1,0 +1,8 @@
+trimesh
+scipy
+scikit-image
+rtree
+fast-simplification
+opencv-python-headless
+shapely
+mapbox-earcut
