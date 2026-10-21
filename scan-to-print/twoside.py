@@ -10,6 +10,7 @@ onto each other). The merged points are rebuilt as a voxel solid, no Mesh Doctor
   python twoside.py sideA.stl sideB.stl --voxel 0.3 --smooth 1 --offset 1.5 -o part.stl
 """
 import argparse
+import os
 
 import numpy as np
 import trimesh
@@ -108,6 +109,9 @@ def main():
     ap.add_argument("--min-height", type=float, default=0.3, help="mm above plate that counts as part")
     ap.add_argument("--faces", type=int, default=200000)
     a = ap.parse_args()
+    for f in [v for k, v in vars(a).items() if k in ("scan", "ai", "side_a", "side_b", "image") and v]:
+        if not os.path.isfile(f):
+            raise SystemExit(f"file not found: {f}\n  (run from the folder that has it, or give the full path, e.g. C:\\scans\\part.stl)")
 
     sides = []
     for name in (a.side_a, a.side_b):

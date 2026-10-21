@@ -12,6 +12,7 @@ Scan may include the plate (best: plane is fit to it) or not (plane fit to the
 part's lowest edge). Mesh (stl/ply/obj) or points (ply/xyz/asc/txt) both work.
 """
 import argparse
+import os
 
 import numpy as np
 import trimesh
@@ -80,6 +81,9 @@ def main():
     ap.add_argument("--faces", type=int, default=200000, help="target face count for slicer")
     ap.add_argument("--min-height", type=float, default=0.5, help="mm above plate to count as part")
     a = ap.parse_args()
+    for f in [v for k, v in vars(a).items() if k in ("scan", "ai", "side_a", "side_b", "image") and v]:
+        if not os.path.isfile(f):
+            raise SystemExit(f"file not found: {f}\n  (run from the folder that has it, or give the full path, e.g. C:\\scans\\part.stl)")
 
     pts, _ = load_points(a.scan)
     print(f"scan: {len(pts):,} points, size {np.ptp(pts, 0).round(1)} mm")

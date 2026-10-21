@@ -9,6 +9,7 @@ self-intersections and flipped normals vanish by construction.
   python smoothprint.py scan.stl --ai ai.glb --smooth 2.0 --voxel 0.5 -o out.stl
 """
 import argparse
+import os
 
 import numpy as np
 import trimesh
@@ -124,6 +125,9 @@ def main():
     ap.add_argument("--offset", type=float, default=0.0, help="grow surface outward by this many mm (clearance)")
     ap.add_argument("--faces", type=int, default=200000, help="target face count for slicer")
     a = ap.parse_args()
+    for f in [v for k, v in vars(a).items() if k in ("scan", "ai", "side_a", "side_b", "image") and v]:
+        if not os.path.isfile(f):
+            raise SystemExit(f"file not found: {f}\n  (run from the folder that has it, or give the full path, e.g. C:\\scans\\part.stl)")
 
     scan = drop_junk(load(a.scan))
     print(f"scan: {len(scan.faces)} faces, size {scan.extents.round(2)}")

@@ -81,6 +81,9 @@ def main():
     ap.add_argument("--ppmm", type=float, default=4.0, help="pixels per mm in the flattened image")
     ap.add_argument("-o", "--out", default="out")
     a = ap.parse_args()
+    for f in [v for k, v in vars(a).items() if k in ("scan", "ai", "side_a", "side_b", "image") and v]:
+        if not os.path.isfile(f):
+            raise SystemExit(f"file not found: {f}\n  (run from the folder that has it, or give the full path, e.g. C:\\scans\\part.stl)")
     os.makedirs(a.out, exist_ok=True)
 
     img = cv2.imread(a.image)
