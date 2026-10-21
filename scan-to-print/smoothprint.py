@@ -73,19 +73,21 @@ def align_ai_to_scan(ai, scan, iters=40):
     return out
 
 
-def voxel_shell(meshes, voxel, smooth, close, offset=0.0):
-    """Rasterize surfaces, close gaps, fill inside, blur, re-surface. Always watertight."""
+def surface_points(mesh, voxel):
+    """Dense enough samples that every voxel the surface crosses gets hit."""
+    return mesh.sample(int(mesh.area / (voxel * voxel) * 4) + 1000)
+
+
+def voxel_shell(clouds, voxel, smooth, close, offset=0.0):
+    """Rasterize surface points, close gaps, fill inside, blur, re-surface. Always watertight."""
     pad = (close + 4 * smooth + 3) * voxel + offset
-    lo = np.min([m.bounds[0] for m in meshes], 0) - pad
-    hi = np.max([m.bounds[1] for m in meshes], 0) + pad
+    lo = np.min([c.min(0) for c in clouds], 0) - pad
+    hi = np.max([c.max(0) for c in clouds], 0) + pad
     shape = np.ceil((hi - lo) / voxel).astype(int) + 1
     if np.prod(shape) > 600e6:
         raise SystemExit(f"grid {shape} too big, raise --voxel")
     grid = np.zeros(shape, bool)
-    for m in meshes:
-        # dense surface samples -> voxels
-        n = int(m.area / (voxel * voxel) * 4) + 1000
-        pts = m.sample(n)
+    for pts in clouds:
         ijk = np.round((pts - lo) / voxel).astype(int)
         grid[ijk[:, 0], ijk[:, 1], ijk[:, 2]] = True
 
@@ -130,7 +132,7 @@ def main():
         ai = drop_junk(load(a.ai))
         meshes.append(align_ai_to_scan(ai, scan))
 
-    out = voxel_shell(meshes, a.voxel, a.smooth, a.close, a.offset)
+    out = voxel_shell([surface_points(m, a.voxel) for m in meshes], a.voxel, a.smooth, a.close, a.offset)
     if len(out.faces) > a.faces:
         try:
             out = out.simplify_quadric_decimation(face_count=a.faces)

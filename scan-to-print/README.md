@@ -5,7 +5,8 @@ manual Mesh Doctor cleanup.
 
 | Tool | Input | Use for |
 |---|---|---|
-| `flatbase.py` | FARO scan of the top of a part lying on the plate | Flat-backed parts (pliers halves, blades). Main workflow. |
+| `twoside.py` | Two FARO scans: side A up, then flipped, side B up | Parts shaped on both faces. Main workflow. |
+| `flatbase.py` | One FARO scan of the top, part lying on the plate | Parts whose underside is flat (top can be any shape) |
 | `photo2outline.py` | One top-down photo on the hole-grid plate | Quick true-scale profiles, foam inserts, shadow boards |
 | `smoothprint.py` | Full 3D scan (optionally + AI mesh from photos) | Shapes scanned from all sides |
 
@@ -34,6 +35,30 @@ then voxelizes, seals gaps, blurs and re-surfaces. Always watertight.
 Limits: an AI mesh is a guess. Both surfaces are merged, so a poor fit adds
 bumps; check the printed alignment error. Tight-tolerance features (bearing
 bores, mating faces) still belong in CAD.
+
+## twoside.py: scan side A, flip, scan side B -> one solid
+
+For parts with shape on both faces. Lay the part on the plate, scan everything
+the arm can see (include some plate), flip it, scan again. Export both from
+Wrap as raw points or mesh, no cleanup, no manual registration.
+
+    python twoside.py sideA.xyz sideB.xyz --voxel 0.3 --smooth 1 -o part.stl
+
+Strips the plate from each scan, turns side B over and matches footprints,
+then refines with ICP that only pairs surfaces facing the same way (so the two
+faces can't collapse onto each other). Merged points are rebuilt as a voxel
+solid. Also writes `part_merged.xyz` so you can check the alignment in Wrap.
+
+Check the printed `median gap`: a few tenths of a mm is good. If it's mm-scale,
+the auto-alignment missed; register the two scans in Wrap instead and run
+`smoothprint.py` on the combined export.
+
+Test on a synthetic plier half (shaped top and bottom, random scan poses,
+noise): surface error median 0.07 mm, 95th percentile 0.26 mm, volume +2.7%.
+
+- `--voxel` grid mm (0.3 default). `--smooth` 0 keeps pitting/rust.
+- `--offset` grow outward mm for clearance.
+- Scan the side walls from both sides: that overlap is what aligns the halves.
 
 ## photo2outline.py: phone photo -> true-scale outline + STL (no scanner)
 
