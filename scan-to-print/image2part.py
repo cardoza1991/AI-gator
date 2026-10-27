@@ -19,11 +19,20 @@ from shapely.geometry import Polygon
 from shapely.ops import unary_union
 
 
+def smooth_ring(xy, sigma_pts):
+    """Gaussian-average a closed outline along its length: pixel stairs -> clean curve."""
+    if sigma_pts < 0.5 or len(xy) < 8:
+        return xy
+    return np.c_[ndimage.gaussian_filter1d(xy[:, 0], sigma_pts, mode="wrap"),
+                 ndimage.gaussian_filter1d(xy[:, 1], sigma_pts, mode="wrap")]
+
+
 def polygons(mask, mm_per_px, smooth):
-    """Black pixels -> shapely polygons in mm (y up), holes included."""
+    """Black pixels -> shapely polygons in mm (y up), holes included, edges smoothed."""
     cnts, hier = cv2.findContours(mask, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_NONE)
     h = mask.shape[0]
-    to_mm = lambda c: np.c_[c[:, 0, 0], h - c[:, 0, 1]] * mm_per_px
+    sig = smooth / mm_per_px  # contour points are ~1 px apart
+    to_mm = lambda c: smooth_ring(np.c_[c[:, 0, 0], h - c[:, 0, 1]].astype(float), sig) * mm_per_px
     out = []
     for i, c in enumerate(cnts):
         if hier[0][i][3] != -1 or len(c) < 4:
@@ -35,10 +44,8 @@ def polygons(mask, mm_per_px, smooth):
                 holes.append(to_mm(cnts[ch]))
             ch = hier[0][ch][0]
         p = Polygon(to_mm(c), holes).buffer(0)
-        if smooth:
-            p = p.buffer(smooth).buffer(-2 * smooth).buffer(smooth)
         if not p.is_empty:
-            out.append(p.simplify(mm_per_px * 0.3))
+            out.append(p.simplify(min(0.02, mm_per_px * 0.3)))
     return out
 
 
@@ -105,7 +112,10 @@ def main():
     ap.add_argument("--backing", type=float, default=0.0,
                     help="mm of solid backing plate under the art (3D print): islands stay attached")
     ap.add_argument("--min-feature", type=float, default=1.0, help="warn about features thinner than this, mm")
-    ap.add_argument("--smooth", type=float, default=0.15, help="round pixel steps off edges, mm")
+    ap.add_argument("--smooth", type=float, default=0.4,
+                    help="mm: smooth pixel stairs out of edges (bigger = rounder corners, 0 = off)")
+    ap.add_argument("--upscale", type=int, default=2,
+                    help="trace edges at this many times the image resolution (smooth curves, no pixel steps)")
     ap.add_argument("--bridge", type=float, default=1.5,
                     help="mm width of strips added to hold floating pieces (0 = don't add, just warn)")
     ap.add_argument("--invert", action="store_true", help="white is material instead of black")
@@ -116,6 +126,10 @@ def main():
     os.makedirs(a.out, exist_ok=True)
 
     g = cv2.imread(a.image, cv2.IMREAD_GRAYSCALE)
+    if a.upscale > 1:
+        # the grey anti-aliased edge pixels say where the true edge lies between pixels;
+        # smooth interpolation + a light blur turns pixel stairs into clean curves
+        g = cv2.resize(g, None, fx=a.upscale, fy=a.upscale, interpolation=cv2.INTER_CUBIC)
     mask = ((g > 128) if a.invert else (g < 128)).astype(np.uint8)
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((2, 2), np.uint8))  # jpeg specks
     ys, xs = np.nonzero(mask)
@@ -128,6 +142,10 @@ def main():
         d = max(3, int(round(a.thicken / mm_per_px)) | 1)
         ball = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (d, d))
         thin_bits = mask & ~cv2.morphologyEx(mask, cv2.MORPH_OPEN, ball)
+        # only long thin strokes (propellers, antennas), not the corner slivers every shape has
+        n_, lab_, st_, _ = cv2.connectedComponentsWithStats(thin_bits, connectivity=8)
+        long_ = np.flatnonzero(np.maximum(st_[1:, 2], st_[1:, 3]) >= 3 * d) + 1
+        thin_bits = np.isin(lab_, long_).astype(np.uint8)
         r = max(3, int(round(a.thicken / 2 / mm_per_px)) | 1)
         grow = cv2.dilate(thin_bits, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (r, r)))
         print(f"thickened {(grow & ~mask).sum() * mm_per_px ** 2:.0f} mm^2 of fine detail to >= ~{a.thicken} mm")
@@ -156,8 +174,13 @@ def main():
     dist = cv2.distanceTransform(mask, cv2.DIST_L2, 5) * 2 * mm_per_px
     ridge = (dist > 0) & (dist >= cv2.dilate(dist, np.ones((3, 3))) - 1e-6)
     thin = ridge & (dist < a.min_feature)
+    # ignore pointed tips: keep only thin runs longer than a couple of feature widths
+    n_, lab_, st_, _ = cv2.connectedComponentsWithStats(
+        cv2.dilate(thin.astype(np.uint8), np.ones((3, 3), np.uint8)), connectivity=8)
+    runs = np.flatnonzero(np.maximum(st_[1:, 2], st_[1:, 3]) * mm_per_px >= 2 * a.min_feature) + 1
+    thin &= np.isin(lab_, runs)
     if thin.any():
-        print(f"WARNING: features down to {dist[ridge].min():.2f} mm wide (below {a.min_feature} mm); "
+        print(f"WARNING: features down to {dist[thin].min():.2f} mm wide (below {a.min_feature} mm); "
               f"check fine details at this size")
     else:
         print(f"thinnest feature ~{np.percentile(dist[ridge], 1):.2f} mm: OK at this size")

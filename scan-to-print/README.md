@@ -115,6 +115,10 @@ Outputs `cut.dxf` + `cut.svg` at true size (laser, plasma, waterjet, CAD),
 - orange: features thinner than `--min-feature` mm at this size.
 - blue: tile seams when split for the printer bed.
 
+Edges are smoothed along their length (`--smooth 0.4` mm) so pixel stairs from
+low-res artwork become clean curves; `--upscale 2` traces at twice the image
+resolution. Raise `--smooth` for rounder, softer edges.
+
 3D printing options:
 - `--height 406.4` sizes by height instead of width (16 in tall).
 - `--thicken 1.2` bulks up fine detail to printable width (0.4 mm nozzle).
