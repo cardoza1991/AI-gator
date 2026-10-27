@@ -107,7 +107,9 @@ Black = material, white = cut away (`--invert` for the opposite).
 
 Outputs `cut.dxf` + `cut.svg` at true size (laser, plasma, waterjet, CAD),
 `plate.stl`, and `check.png` marking problems:
-- red: islands, pieces not connected to the rest (centers of D, O, A...) that
-  fall out when cut. Bridge them in the art, cut them loose, or for 3D printing
-  use `--backing` so they sit on a solid back plate.
+- green: bridges added automatically (`--bridge 1.5`, mm wide) so floating
+  pieces (centers of D, O, A...) stay attached: two per piece, on opposite
+  sides, stencil style. `--bridge 0` turns this off.
+- red: floating pieces left (only with `--bridge 0`). Cut them loose, or for
+  3D printing use `--backing` so they sit on a solid back plate.
 - orange: features thinner than `--min-feature` mm at this size.
