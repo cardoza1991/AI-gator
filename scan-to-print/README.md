@@ -97,3 +97,17 @@ a height map, fills gaps, closes a dead-flat bottom at z=0. Always watertight.
 - `--fill` closes scan gaps up to about this many mm; real slots bigger than that stay open.
 - `--offset` grows sides + top for clearance (bottom stays on the plate).
 - Limit: undercuts (anything overhanging when seen from above) get filled straight down.
+
+## image2part.py: logo / sign artwork -> cut files + printable plate
+
+Black = material, white = cut away (`--invert` for the opposite).
+
+    python image2part.py logo.jpg --width 300 --thickness 3 -o out/
+    python image2part.py logo.jpg --width 300 --thickness 3 --backing 1.2 -o out/
+
+Outputs `cut.dxf` + `cut.svg` at true size (laser, plasma, waterjet, CAD),
+`plate.stl`, and `check.png` marking problems:
+- red: islands, pieces not connected to the rest (centers of D, O, A...) that
+  fall out when cut. Bridge them in the art, cut them loose, or for 3D printing
+  use `--backing` so they sit on a solid back plate.
+- orange: features thinner than `--min-feature` mm at this size.
