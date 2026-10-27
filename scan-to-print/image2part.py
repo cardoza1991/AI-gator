@@ -125,12 +125,14 @@ def main():
         f.write(f'<svg xmlns="http://www.w3.org/2000/svg" width="{w:.2f}mm" height="{h:.2f}mm" viewBox="0 0 {w:.3f} {h:.3f}">'
                 f'<g fill="black" fill-rule="evenodd" stroke="none">{paths}</g></svg>')
 
-    meshes = [trimesh.creation.extrude_polygon(p, a.thickness) for p in getattr(art, "geoms", [art])]
+    meshes = [trimesh.creation.extrude_polygon(p, a.thickness + a.backing) for p in getattr(art, "geoms", [art])]
+    for m in meshes:  # art reaches down into the backing: overlapping solids, no shared faces
+        m.apply_translation([0, 0, -a.backing])
     if a.backing:
         back = Polygon(art.convex_hull.exterior) if not islands else unary_union(
             [Polygon(p.exterior) for p in getattr(art, "geoms", [art])])
-        b = trimesh.creation.extrude_polygon(back, a.backing)
-        b.apply_translation([0, 0, -a.backing])
+        b = trimesh.creation.extrude_polygon(back, a.backing - 0.01)
+        b.apply_translation([0, 0, -a.backing + 0.005])
         meshes.append(b)
     plate = trimesh.util.concatenate(meshes)
     plate.export(os.path.join(a.out, "plate.stl"))
