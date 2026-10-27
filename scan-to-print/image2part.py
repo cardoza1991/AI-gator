@@ -97,6 +97,10 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("image")
     ap.add_argument("--width", type=float, default=300, help="finished width of the artwork, mm")
+    ap.add_argument("--height", type=float, help="finished height, mm (overrides --width)")
+    ap.add_argument("--thicken", type=float, default=0.0,
+                    help="mm: bulk up any feature thinner than this (3D printing: 1.0 for a 0.4 mm nozzle)")
+    ap.add_argument("--bed", help="printer bed WxH mm, e.g. 256x256: split the plate into tiles that fit")
     ap.add_argument("--thickness", type=float, default=3.0, help="plate thickness, mm")
     ap.add_argument("--backing", type=float, default=0.0,
                     help="mm of solid backing plate under the art (3D print): islands stay attached")
@@ -116,9 +120,18 @@ def main():
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((2, 2), np.uint8))  # jpeg specks
     ys, xs = np.nonzero(mask)
     mask = mask[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
-    mm_per_px = a.width / mask.shape[1]
-    print(f"artwork {mask.shape[1]} x {mask.shape[0]} px -> {a.width:.1f} x {mask.shape[0] * mm_per_px:.1f} mm "
+    mm_per_px = a.height / mask.shape[0] if a.height else a.width / mask.shape[1]
+    print(f"artwork {mask.shape[1]} x {mask.shape[0]} px -> {mask.shape[1] * mm_per_px:.1f} x {mask.shape[0] * mm_per_px:.1f} mm "
           f"({mm_per_px:.3f} mm/px)")
+
+    if a.thicken:
+        d = max(3, int(round(a.thicken / mm_per_px)) | 1)
+        ball = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (d, d))
+        thin_bits = mask & ~cv2.morphologyEx(mask, cv2.MORPH_OPEN, ball)
+        r = max(3, int(round(a.thicken / 2 / mm_per_px)) | 1)
+        grow = cv2.dilate(thin_bits, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (r, r)))
+        print(f"thickened {(grow & ~mask).sum() * mm_per_px ** 2:.0f} mm^2 of fine detail to >= ~{a.thicken} mm")
+        mask = mask | grow
 
     bridges = []
     if a.bridge:
@@ -181,6 +194,78 @@ def main():
         meshes.append(b)
     plate = trimesh.util.concatenate(meshes)
     plate.export(os.path.join(a.out, "plate.stl"))
+    if a.bed:
+        bw, bh = (float(v) for v in a.bed.lower().split("x"))
+        fit = lambda W, H: (int(np.ceil(W / (bw - 10))), int(np.ceil(H / (bh - 10))))
+        nx, ny = min(fit(w, h), fit(h, w), key=lambda t: t[0] * t[1])  # try both orientations
+        if nx * ny == 1:
+            print(f"fits the {a.bed} bed in one piece")
+        else:
+            from shapely.geometry import box
+
+            # place seams where they leave no slivers and fewest loose pieces;
+            # every tile must still fit the bed
+            def cuts(n, L, cap):
+                if n == 1:
+                    return [[0, L]]
+                lo_, hi_ = L - (n - 1) * cap, cap  # first seam range keeping all tiles <= cap
+                base = np.linspace(0, L, n + 1)
+                shifts = np.arange(-0.25 * L / n, 0.25 * L / n + 1e-9, 2.0)
+                return [list(base + np.r_[0, [sh] * (n - 1), 0]) for sh in shifts
+                        if all(0 < b - a <= cap for a, b in zip(base + np.r_[0, [sh] * (n - 1), 0],
+                                                               (base + np.r_[0, [sh] * (n - 1), 0])[1:]))]
+
+            from shapely.geometry import LineString
+
+            holes = [Polygon(r) for g in getattr(art, "geoms", [art]) for r in g.interiors]
+            mounts = [hq.buffer(3) for hq in holes if hq.area < 400]  # small holes: screw/hanging holes
+
+            def score(xs, ys):
+                seams = [LineString([(x, -1), (x, h + 1)]) for x in xs[1:-1]] + \
+                        [LineString([(-1, y), (w + 1, y)]) for y in ys[1:-1]]
+                bad = sum(5000 for sl in seams for m in mounts if sl.intersects(m))  # never split a mount hole
+                for i in range(nx):
+                    for j in range(ny):
+                        q = art.intersection(box(xs[i], ys[j], xs[i + 1], ys[j + 1]))
+                        polys = [g for g in getattr(q, "geoms", [q]) if g.geom_type == "Polygon"]
+                        bad += sum(1000 for g in polys if g.area < 60) + len(polys)
+                return bad
+
+            capx, capy = bw - 10, bh - 10
+            if (w > capx) != (nx > 1) or nx * (bw - 10) < w:
+                capx, capy = bh - 10, bw - 10  # rotated orientation
+            best = min(((score(xs, ys), xs, ys) for xs in cuts(nx, w, capx) for ys in cuts(ny, h, capy)),
+                       key=lambda t: t[0])
+            _, xs, ys = best
+            for i in range(nx):
+                for j in range(ny):
+                    cell = box(xs[i], ys[ny - 1 - j], xs[i + 1], ys[ny - j])
+                    parts = [trimesh.creation.extrude_polygon(q, a.thickness + a.backing)
+                             for q in getattr(art.intersection(cell), "geoms", [art.intersection(cell)])
+                             if q.geom_type == "Polygon" and q.area > 1]
+                    if a.backing:
+                        bq = back.intersection(cell)
+                        for q in getattr(bq, "geoms", [bq]):
+                            if q.geom_type == "Polygon" and q.area > 1:
+                                t = trimesh.creation.extrude_polygon(q, a.backing - 0.01)
+                                t.apply_translation([0, 0, 0.005])
+                                parts.append(t)
+                    if parts:
+                        trimesh.util.concatenate(parts).export(os.path.join(a.out, f"tile_r{j + 1}c{i + 1}.stl"))
+            chk = cv2.imread(os.path.join(a.out, "check.png"))
+            for x in xs[1:-1]:
+                cv2.line(chk, (int(x / mm_per_px), 0), (int(x / mm_per_px), chk.shape[0]), (255, 120, 0), 3)
+            for y in ys[1:-1]:
+                cv2.line(chk, (0, int((h - y) / mm_per_px)), (chk.shape[1], int((h - y) / mm_per_px)), (255, 120, 0), 3)
+            for i in range(nx):
+                for j in range(ny):
+                    cx, cy = (xs[i] + xs[i + 1]) / 2 / mm_per_px, (h - (ys[ny - 1 - j] + ys[ny - j]) / 2) / mm_per_px
+                    cv2.putText(chk, f"r{j + 1}c{i + 1}", (int(cx) - 40, int(cy)), cv2.FONT_HERSHEY_SIMPLEX, 1.4,
+                                (255, 120, 0), 3)
+            cv2.imwrite(os.path.join(a.out, "check.png"), chk)
+            print(f"split into {ny} x {nx} tiles (seams at x={[round(v) for v in xs[1:-1]]}, "
+                  f"y={[round(v) for v in ys[1:-1]]} mm) for a {a.bed} bed: tile_r*c*.stl "
+                  f"(r1 = top row). Glue edge to edge, or onto a backer board.")
     print(f"wrote cut.dxf, cut.svg, plate.stl, check.png ({plate.extents.round(1)} mm) -> {a.out}/")
 
 

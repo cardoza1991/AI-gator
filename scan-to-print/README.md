@@ -113,3 +113,12 @@ Outputs `cut.dxf` + `cut.svg` at true size (laser, plasma, waterjet, CAD),
 - red: floating pieces left (only with `--bridge 0`). Cut them loose, or for
   3D printing use `--backing` so they sit on a solid back plate.
 - orange: features thinner than `--min-feature` mm at this size.
+- blue: tile seams when split for the printer bed.
+
+3D printing options:
+- `--height 406.4` sizes by height instead of width (16 in tall).
+- `--thicken 1.2` bulks up fine detail to printable width (0.4 mm nozzle).
+- `--bed 256x256` splits into tiles that fit the bed. Seams are placed to
+  avoid splitting mounting holes and to avoid slivers.
+- `--backing 1.5` adds a solid back plate: loose bits stay put, tiles get a
+  bigger glue face, and a color change at the backing gives a two-tone plaque.
